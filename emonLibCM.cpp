@@ -50,6 +50,7 @@
 //                            most of the code in the pulse ISR removed, replaced by countPulses( ) called from main loop. 
 // Version 2.2.1 5/12/2012  Repackaged 30/10/2021 release: Debugging statements accidentally left in pulse ISR removed.
 // Version 2.2.2 15/9/2022  If temperature sensor pin had not been set but relied on default, no power was applied for initial search.
+// Version 2.3   6/05/2023 Add support for DS2438 sensors
 
 // #include "WProgram.h" un-comment for use on older versions of Arduino IDE
 
@@ -259,7 +260,7 @@ double x[max_no_of_channels], y[max_no_of_channels]; // coefficients for real po
 // Temperature measurement
 //
 // Hardware Configuration
-byte W1Pin = 5;                                     // 1-Wire pin for temperature = 5 for emonTx V3, 4 for emonTx V2 & emonTx Shield
+byte W1Pin = W1_PIN;                                     // 1-Wire pin for temperature = 5 for emonTx V3, 4 for emonTx V2 & emonTx Shield
 char DS18B20_PWR = -1;                              // Power pin for DS18B20 temperature sensors. Default -1 - power off
 
 // Global variables used only inside the library
@@ -1229,6 +1230,8 @@ void EmonLibCM_TemperatureEnable(bool _enable)
         return;                                         // & quit.
     }
 
+  Serial.println(W1Pin);
+  //oneWire.begin(W1Pin);                               // In case W1Pin has changed.
 
     if (temperatureEnabled = _enable)
     {
@@ -1251,14 +1254,14 @@ void EmonLibCM_TemperatureEnable(bool _enable)
         oneWire.reset_search();
         numSensors = 0;
         while (oneWire.search(deviceAddress)) 
-            if (deviceAddress[0] == DS18B20SIG)
+      if (deviceAddress[0] == DS18B20SIG || deviceAddress[0] == DS2438SIG )
                 numSensors++;
         if (keepAddresses && temperatureSensors[0][0] != 0x00)
         {
             numSensors = temperatureMaxCount;
             for (numSensors = temperatureMaxCount; numSensors > 0; numSensors--)
             {
-                if (temperatureSensors[numSensors-1][0] == DS18B20SIG)       // signature of a DS18B20, so a pre-existing sensor
+        if (temperatureSensors[numSensors - 1][0] == DS18B20SIG || temperatureSensors[numSensors - 1][0] == DS2438SIG )   // signature of a DS18B20/DS2438, so a pre-existing sensor
                     break;
             }
         }
@@ -1270,7 +1273,7 @@ void EmonLibCM_TemperatureEnable(bool _enable)
 
         byte j=0;                                       // search for one wire devices and copy to device address array.
         
-        if (temperatureSensors[0][0] != DS18B20SIG)     // not a signature of a DS18B20, so not a pre-existing array - search for sensors
+    if (temperatureSensors[0][0] != DS18B20SIG || temperatureSensors[0][0] != DS2438SIG )     // not a signature of a DS18B20, so not a pre-existing array - search for sensors
             while ((j < numSensors) && (oneWire.search(temperatureSensors[j]))) 
                 j++;
         oneWire.reset();                                // write resolution to scratchpad 
@@ -1362,6 +1365,8 @@ void convertTemperatures(void)
 
 void retrieveTemperatures(void)
 {
+  bool DS2438 = 0;
+
     if (temperatureEnabled)
     {
         for (byte j=0; j < numSensors; j++)
@@ -1378,23 +1383,49 @@ void retrieveTemperatures(void)
             else
             {
                 oneWire.write(MATCH_ROM);
-                for(int i=0; i<8; i++) 
+        for (int i = 0; i < 8; i++)
+          oneWire.write(temperatureSensors[j][i]);
+
+	if (temperatureSensors[j][0] == DS2438SIG) {
+		//DS2438 needs a RECALL_MEMORY CMD first
+		DS2438 = 1;
+		oneWire.write(0xB8); //Recall Memory
+		oneWire.write(0x00); //Page0
+		oneWire.reset() ;
+		oneWire.write(MATCH_ROM);
+		for (int i = 0; i < 8; i++)
                     oneWire.write(temperatureSensors[j][i]);
                 oneWire.write(READ_SCRATCHPAD);
-                for(int i=0; i<9; i++) 
-                    buf[i] = oneWire.read();
-            }
+		oneWire.write(0x00);	//Page0 of scratchpad
+	} else {
+		DS2438 = 0 ;
+		oneWire.write(READ_SCRATCHPAD);
+	}
 
-            if(oneWire.crc8(buf,8)==buf[8])
+	//Read the scratchpad 8 bytes + CRC into Buf
+        for (int i = 0; i < 9; i++)
+                    buf[i] = oneWire.read();
+
+
+      }
+
+      if ( oneWire.crc8(buf, 8) == buf[8])
             {
-                result = (buf[1]<<8)|buf[0];
+        result = (buf[1] << 8) | buf[0];
+        if (DS2438) {
+	  //DS2438 temp calculation x100
+          result = 100* (double)(((((int16_t)buf[2]) << 8) | (buf[1] & 0x0ff)) >> 3) * 0.03125 ;
+        } else {
                 // result is temperature x16, multiply by 6.25 to convert to temperature x100
                 result = (result*6)+(result>>2);
             }
-            else result = BAD_TEMPERATURE;
-            if (buf[4] == 0)
+      } else {
               result = BAD_TEMPERATURE;
-            if (buf[6] ==  0x0C && result == 8500)  // not genuine 85 °C
+	  Serial.println("OneWire CRC failure.");
+	}
+      if (buf[4] == 0 && !DS2438 )
+        result = BAD_TEMPERATURE;
+      if (buf[6] ==  0x0C && result == 8500 && !DS2438)  // not genuine 85 °C
               result = BAD_TEMPERATURE;
             if (result != BAD_TEMPERATURE && (result < -5500 || result > 12500))
                 result = OUTOFRANGE_TEMPERATURE;

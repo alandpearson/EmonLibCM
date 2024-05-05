@@ -27,8 +27,18 @@
 // Version 2.2.0 14/9/2021  Optional parameter 'edge' added to setPulseMinPeriod().
 // Version 2.2.1 5/12/2021  Repackaged - no change.
 // Version 2.2.2 15/9/2022  No change.
+// Version 2.3   6/05/2023 Add support for DS2438 sensors
 
+//If using with emonTx, ensure your define EMONTX below or the oneWire bus will be on the wrong pin.
+// Defaulting to pin 4 seems sensible as this will stop 1W working on a EMONTX but will cause causing spurious shutdowns on an EMONPI.
 
+#undef EMONTX
+
+#ifdef EMONTX
+#define W1_PIN 5      //1W pin on a EMONTX, Shutdown pin on EMONPI
+#else
+#define W1_PIN 4      //1W pin on a EMONPI
+#endif
 
 #ifndef EmonLibCM_h
 #define EmonLibCM_h
@@ -51,7 +61,9 @@
 #include <util/crc16.h>
 #include <OneWire.h>
 
+
 #define DS18B20SIG 0x28
+#define DS2438SIG 0x26
 #define SKIP_ROM 0xCC 
 #define MATCH_ROM 0x55
 #define CONVERT_TEMPERATURE 0x44
